@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import gzip
 import shutil
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -19,7 +20,7 @@ import streamlit as st
 
 STATIC = Path(__file__).parent / "static"
 PAGE = "dashboard.html"
-URL = f"/app/static/{PAGE}"
+REL_URL = f"app/static/{PAGE}"          # no leading slash: resolved against the page the visitor is on
 
 st.set_page_config(page_title="Dubai urban heat hotspots", page_icon="🌡️", layout="wide",
                    initial_sidebar_state="collapsed")
@@ -57,20 +58,25 @@ def prepare_dashboard() -> bool:
 
 @st.cache_resource
 def static_serves_html() -> bool | None:
-    """Ask this app's own server whether /app/static/dashboard.html comes back as a web page.
+    """Ask this app's own server whether /app/static/dashboard.html really comes back as the dashboard.
 
-    Streamlit's documentation lists only images, fonts, PDF, XML and JSON as served normally,
-    so on some versions or hosts an .html file would arrive as plain text. Returns True/False,
-    or None if the check itself could not be made.
+    It can fail in two ways: static serving is not switched on (the server then answers with
+    Streamlit's own page, or a 404), or the host sends .html files as plain text (Streamlit's
+    documentation lists only images, fonts, PDF, XML and JSON as served normally).
+    Returns True/False, or None if the check itself could not be made.
     """
     port = st.get_option("server.port") or 8501
     base = (st.get_option("server.baseUrlPath") or "").strip("/")
     url = f"http://127.0.0.1:{port}/{base + '/' if base else ''}app/static/{PAGE}"
     try:
-        with urllib.request.urlopen(url, timeout=5) as r:      # only the headers are read
-            return r.headers.get("Content-Type", "").lower().startswith("text/html")
+        with urllib.request.urlopen(url, timeout=5) as r:
+            is_html = r.headers.get("Content-Type", "").lower().startswith("text/html")
+            start = r.read(60000)                       # the dashboard's own title is near the top
+    except urllib.error.HTTPError:
+        return False
     except Exception:
         return None
+    return is_html and b"Dubai urban heat" in start
 
 
 st.markdown(
@@ -94,7 +100,7 @@ compat_forced = st.query_params.get("mode") == "embedded"
 with st.sidebar:
     st.header("Dubai urban heat dashboard")
     compat = st.toggle("Compatibility mode", value=compat_forced,
-                       help="Use this if the dashboard area below stays blank or shows code. "
+                       help="Use this if the dashboard area stays blank or shows code. "
                             "It sends the page through the app itself: slower to open, but works everywhere.")
 use_embedded = compat or compat_forced or static_serves_html() is False
 
@@ -103,9 +109,15 @@ if use_embedded:
         st.caption("Compatibility mode is on (the dashboard is sent through the app, so it opens more slowly).")
     st.iframe(STATIC / PAGE, height=1700)
 else:
+    st.caption("Blank or stuck? [Open compatibility mode](?mode=embedded) (slower, but works everywhere).")
     with st.sidebar:
-        st.markdown(f"[Open full screen in a new tab]({URL}) (best on phones and tablets)")
-    st.iframe(URL, height=1700)
+        st.markdown(f"[Open full screen in a new tab]({REL_URL}) (best on phones and tablets)")
+    # The inner frame uses a relative address, so it works wherever the app is hosted
+    # (localhost, a subfolder, or Streamlit Community Cloud's own address layout).
+    st.iframe(
+        f'''<style>html,body{{margin:0;height:100%}}iframe{{width:100%;height:100%;border:0;border-radius:8px}}</style>
+        <iframe src="{REL_URL}" allow="accelerometer; autoplay; clipboard-write; fullscreen"></iframe>''',
+        height=1700)
 
 with st.sidebar:
     st.caption("The AI models run in your own browser: free, private, no API key. "
