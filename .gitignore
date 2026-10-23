@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+# rebuilt automatically from the pieces when the app starts
+static/dashboard.html
+static/_*
